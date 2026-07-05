@@ -1,20 +1,27 @@
 import Parser from "rss-parser";
 import { readFile, writeFile } from "node:fs/promises";
 
-const CATEGORIES = [
-  {
-    label: "🇺🇦 Україна",
-    feeds: [
-      { source: "Українська правда", url: "https://www.pravda.com.ua/rss/view_mainnews/" },
-      { source: "ТСН", url: "https://tsn.ua/rss/full.rss" },
-      { source: "НВ", url: "https://nv.ua/rss/all.xml" }
-    ]
-  }
+const FEEDS = [
+  { source: "Українська правда", url: "https://www.pravda.com.ua/rss/view_mainnews/" },
+  { source: "Українська правда", url: "https://www.pravda.com.ua/rss/view_news/" },
+  { source: "ТСН", url: "https://tsn.ua/rss/full.rss" },
+  { source: "НВ", url: "https://nv.ua/rss/all.xml" },
+  { source: "УНІАН", url: "https://rss.unian.net/site/news_ukr.rss" },
+  { source: "ГОРДОН", url: "https://gordonua.com/xml/rss_category/top.html" }
+];
+
+const TAGS = [
+  { label: "🔴 Війна", re: /обстріл|ракет|дрон|шахед|удар|фронт|зсу|окупан|ппо|атак|вибух|ворог|бпла|тривог|снаряд|полон|мобіліз/i },
+  { label: "🏛 Політика", re: /зеленськ|верховна рада|уряд|міністр|президент|депутат|вибор|санкц|коаліц|парламент|політик|кабмін/i },
+  { label: "💵 Економіка", re: /курс|гривн|долар|євро|інфляц|бюджет|тариф|ціни|податк|бізнес|економ|зарплат|субсид|мвф/i },
+  { label: "💻 Технології", re: /технолог|застосун|гаджет|apple|google|microsoft|штучн інтелект|стартап|нейромереж|смартфон/i },
+  { label: "🌍 Світ", re: /сша|трамп|байден|євросоюз|нато|путін|росія|кремл|китай|ізраїл|європ|світов|орбан/i }
 ];
 
 const STATE_FILE = "state.json";
-const MAX_STATE = 1000;
+const MAX_STATE = 1500;
 const MAX_AGE_HOURS = 8;
+const MAX_PER_RUN = 4;
 const MAX_GIST = 260;
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const CHANNEL_ID = process.env.CHANNEL_ID;
@@ -27,12 +34,24 @@ const parser = new Parser({
   }
 });
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 function escapeHtml(s = "") {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 function clean(s = "") {
   return s.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function norm(s = "") {
+  return s.toLowerCase().replace(/[^a-zа-яіїєґ0-9 ]/gi, "").replace(/\s+/g, " ").trim();
+}
+
+function tag(title) {
+  const t = title.toLowerCase();
+  for (const x of TAGS) if (x.re.test(t)) return x.label;
+  return "📰 Головне";
 }
 
 function gist(item) {
@@ -78,31 +97,30 @@ async function send(text) {
   if (!res.ok) throw new Error(`Telegram ${res.status}: ${await res.text()}`);
 }
 
-async function pick(cat, seen) {
-  for (const feed of cat.feeds) {
+async function collect() {
+  const all = [];
+  for (const feed of FEEDS) {
     try {
       const parsed = await parser.parseURL(feed.url);
-      const items = (parsed.items || [])
-        .filter((i) => {
-          const id = i.guid || i.link || i.title;
-          return id && !seen.has(id) && fresh(i);
-        })
-        .sort((a, b) => new Date(b.isoDate || 0) - new Date(a.isoDate || 0));
-      if (items[0]) return { item: items[0], source: feed.source };
+      for (const i of parsed.items || []) {
+        const id = i.guid || i.link || i.title;
+        if (id) all.push({ ...i, id, source: feed.source });
+      }
     } catch (e) {
       console.error(`[skip] ${feed.url}: ${e.message}`);
     }
   }
-  return null;
+  return all;
 }
 
-function format(cat, item, source) {
-  const title = escapeHtml(clean(item.title || "Без заголовка"));
+function format(item) {
+  const rawTitle = clean(item.title || "Без заголовка");
+  const title = escapeHtml(rawTitle);
   const g = escapeHtml(gist(item));
   const link = item.link || "";
-  let text = `${cat.label}\n\n<b>${title}</b>`;
+  let text = `${tag(rawTitle)}\n\n<b>${title}</b>`;
   if (g) text += `\n\n${g}`;
-  if (link) text += `\n\n🔗 <a href="${link}">Читати повністю</a> · ${escapeHtml(source)}`;
+  if (link) text += `\n\n🔗 <a href="${link}">Читати повністю</a> · ${escapeHtml(item.source)}`;
   return text;
 }
 
@@ -110,22 +128,24 @@ async function run() {
   if (!BOT_TOKEN || !CHANNEL_ID) throw new Error("BOT_TOKEN or CHANNEL_ID missing");
   const posted = await loadState();
   const seen = new Set(posted);
-  for (const cat of CATEGORIES) {
-    const picked = await pick(cat, seen);
-    if (!picked) continue;
-    const id = picked.item.guid || picked.item.link || picked.item.title;
+  const items = (await collect())
+    .filter((i) => fresh(i) && !seen.has(i.id))
+    .sort((a, b) => new Date(b.isoDate || 0) - new Date(a.isoDate || 0));
+
+  let count = 0;
+  const titles = new Set();
+  for (const item of items) {
+    if (count >= MAX_PER_RUN) break;
+    const nt = norm(item.title || "");
+    if (!nt || titles.has(nt)) continue;
     try {
-      await send(format(cat, picked.item, picked.source));
-      posted.push(id);
-      seen.add(id);
+      await send(format(item));
+      posted.push(item.id);
+      seen.add(item.id);
+      titles.add(nt);
+      count++;
+      await sleep(1200);
     } catch (e) {
       console.error(`[send-fail] ${e.message}`);
     }
   }
-  await saveState(posted);
-}
-
-run().catch((e) => {
-  console.error(e);
-  process.exit(1);
-});
