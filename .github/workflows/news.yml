@@ -22,7 +22,7 @@ jobs:
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
-    - name: commit state
+      - name: commit state
         env:
           GIT_TERMINAL_PROMPT: "0"
         run: |
@@ -32,4 +32,4 @@ jobs:
           git diff --staged --quiet && exit 0
           git commit -m "state update"
           timeout 45 git pull --rebase -X ours origin main || true
-          timeout 45 git push origin HEAD:main || echo "[git] push failed, skip"
+          timeout 45 git push origin HEAD:main || echo "push failed"
