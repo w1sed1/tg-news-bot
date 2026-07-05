@@ -28,6 +28,7 @@ const SEND_TIMEOUT = 12000;
 const HARD_LIMIT = 240000;
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const CHANNEL_ID = process.env.CHANNEL_ID;
+const DISCUSSION_URL = process.env.DISCUSSION_URL || "https://t.me/holovne_za_hodynu_chat";
 const CHANNEL_LINK = "https://t.me/holovne_za_hodynu";
 
 const parser = new Parser({
@@ -77,17 +78,21 @@ function fresh(item) {
 async function loadState() {
   try {
     const data = JSON.parse(await readFile(STATE_FILE, "utf8"));
-    return Array.isArray(data.posted) ? data.posted : [];
+    return {
+      posted: Array.isArray(data.posted) ? data.posted : [],
+      lastSummary: data.lastSummary || ""
+    };
   } catch {
-    return [];
+    return { posted: [], lastSummary: "" };
   }
 }
 
-async function saveState(posted) {
-  await writeFile(STATE_FILE, JSON.stringify({ posted: posted.slice(-MAX_STATE) }, null, 2));
+async function saveState(state) {
+  state.posted = state.posted.slice(-MAX_STATE);
+  await writeFile(STATE_FILE, JSON.stringify(state, null, 2));
 }
 
-async function send(text) {
+async function send(text, isNight) {
   const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -96,7 +101,11 @@ async function send(text) {
       chat_id: CHANNEL_ID,
       text,
       parse_mode: "HTML",
-      disable_web_page_preview: false
+      disable_web_page_preview: false,
+      disable_notification: isNight,
+      reply_markup: {
+        inline_keyboard: [[{ text: "💬 Обговорення", url: DISCUSSION_URL }]]
+      }
     })
   });
   if (!res.ok) throw new Error(`Telegram ${res.status}: ${await res.text()}`);
@@ -116,8 +125,6 @@ async function collect() {
   results.forEach((r, idx) => {
     if (r.status === "fulfilled") {
       for (const it of r.value) if (it.id) all.push(it);
-    } else {
-      console.error(`[skip] ${FEEDS[idx].url}: ${r.reason?.message || r.reason}`);
     }
   });
   return all;
@@ -128,20 +135,53 @@ function format(item) {
   const title = escapeHtml(rawTitle);
   const g = escapeHtml(gist(item));
   const link = item.link || "";
-  let text = `${tag(rawTitle)}\n\n<b>${title}</b>`;
-  if (g) text += `\n\n${g}`;
-  if (link) text += `\n\n🔗 <a href="${link}">Читати повністю</a> · ${escapeHtml(item.source)}`;
-  text += `\n\n<a href="${CHANNEL_LINK}"><b>⚡ Головне за годину</b></a>`;
+  let text = `<b>${tag(rawTitle)}</b>\n`;
+  text += `━━━━━━━━━━━━━━━━━━━━\n`;
+  text += `<b>${title}</b>\n\n`;
+  if (g) text += `<i>${g}</i>\n\n`;
+  text += `━━━━━━━━━━━━━━━━━━━━\n`;
+  if (link) text += `🔗 <a href="${link}">Читати повністю</a> · ${escapeHtml(item.source)}\n`;
+  text += `\n<a href="${CHANNEL_LINK}"><b>⚡ Головне за годину</b></a>`;
   return text;
 }
 
 async function run() {
   if (!BOT_TOKEN || !CHANNEL_ID) throw new Error("BOT_TOKEN or CHANNEL_ID missing");
-  const posted = await loadState();
-  const seen = new Set(posted);
+  const state = await loadState();
+  const seen = new Set(state.posted);
   const items = (await collect())
     .filter((i) => fresh(i) && !seen.has(i.id))
     .sort((a, b) => new Date(b.isoDate || 0) - new Date(a.isoDate || 0));
+
+  const hour = new Date().getHours();
+  const isNight = hour >= 23 || hour < 7;
+  const today = new Date().toISOString().split("T")[0];
+  const isMorning = hour === 8;
+  const isEvening = hour === 20;
+
+  let summaryType = "";
+  if (isMorning) summaryType = today + "-morning";
+  if (isEvening) summaryType = today + "-evening";
+
+  if (summaryType && state.lastSummary !== summaryType) {
+    const summaryItems = items.slice(0, 5);
+    if (summaryItems.length > 0) {
+      let text = isMorning ? "☀️ <b>Ранковий підсумок:</b>\n\n" : "🌙 <b>Вечірній підсумок:</b>\n\n";
+      summaryItems.forEach((i, idx) => {
+        text += `${idx + 1}. <a href="${i.link || ''}">${escapeHtml(clean(i.title || ""))}</a>\n`;
+      });
+      text += `\n<a href="${CHANNEL_LINK}"><b>⚡ Головне за годину</b></a>`;
+      
+      await send(text, isNight);
+      state.lastSummary = summaryType;
+      summaryItems.forEach(i => {
+        state.posted.push(i.id);
+        seen.add(i.id);
+      });
+      await saveState(state);
+      return;
+    }
+  }
 
   let count = 0;
   const titles = new Set();
@@ -150,22 +190,18 @@ async function run() {
     const nt = norm(item.title || "");
     if (!nt || titles.has(nt)) continue;
     try {
-      await send(format(item));
-      posted.push(item.id);
+      await send(format(item), isNight);
+      state.posted.push(item.id);
       seen.add(item.id);
       titles.add(nt);
       count++;
       await sleep(1200);
-    } catch (e) {
-      console.error(`[send-fail] ${e.message}`);
-    }
+    } catch (e) {}
   }
-  await saveState(posted);
-  console.log(`posted ${count}`);
+  await saveState(state);
 }
 
 const wd = setTimeout(() => {
-  console.error("[watchdog] forced exit");
   process.exit(1);
 }, HARD_LIMIT);
 wd.unref();
@@ -173,10 +209,8 @@ wd.unref();
 run()
   .then(() => {
     clearTimeout(wd);
-    console.log("done");
     process.exit(0);
   })
   .catch((e) => {
-    console.error(e);
     process.exit(1);
   });
