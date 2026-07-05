@@ -171,7 +171,11 @@ const wd = setTimeout(() => {
 wd.unref();
 
 run()
-  .then(() => clearTimeout(wd))
+  .then(() => {
+    clearTimeout(wd);
+    console.log("done");
+    process.exit(0);
+  })
   .catch((e) => {
     console.error(e);
     process.exit(1);
