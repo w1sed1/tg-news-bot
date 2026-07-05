@@ -25,6 +25,7 @@ const MAX_PER_RUN = 4;
 const MAX_GIST = 260;
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const CHANNEL_ID = process.env.CHANNEL_ID;
+const CHANNEL_LINK = "https://t.me/holovne_za_hodynu";
 
 const parser = new Parser({
   timeout: 15000,
@@ -121,6 +122,7 @@ function format(item) {
   let text = `${tag(rawTitle)}\n\n<b>${title}</b>`;
   if (g) text += `\n\n${g}`;
   if (link) text += `\n\n🔗 <a href="${link}">Читати повністю</a> · ${escapeHtml(item.source)}`;
+  text += `\n\n<a href="${CHANNEL_LINK}"><b>⚡ Головне за годину</b></a>`;
   return text;
 }
 
