@@ -149,3 +149,10 @@ async function run() {
       console.error(`[send-fail] ${e.message}`);
     }
   }
+  await saveState(posted);
+}
+
+run().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});
