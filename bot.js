@@ -23,12 +23,15 @@ const MAX_STATE = 1500;
 const MAX_AGE_HOURS = 8;
 const MAX_PER_RUN = 4;
 const MAX_GIST = 260;
+const FEED_TIMEOUT = 12000;
+const SEND_TIMEOUT = 12000;
+const HARD_LIMIT = 240000;
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const CHANNEL_ID = process.env.CHANNEL_ID;
 const CHANNEL_LINK = "https://t.me/holovne_za_hodynu";
 
 const parser = new Parser({
-  timeout: 15000,
+  timeout: FEED_TIMEOUT,
   headers: {
     "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36",
     Accept: "application/rss+xml, application/xml, text/xml, */*"
@@ -88,6 +91,7 @@ async function send(text) {
   const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    signal: AbortSignal.timeout(SEND_TIMEOUT),
     body: JSON.stringify({
       chat_id: CHANNEL_ID,
       text,
@@ -99,21 +103,23 @@ async function send(text) {
 }
 
 async function collect() {
-  const all = [];
-  for (const feed of FEEDS) {
-    try {
+  const results = await Promise.allSettled(
+    FEEDS.map(async (feed) => {
       const parsed = await Promise.race([
         parser.parseURL(feed.url),
-        new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 12000))
+        new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), FEED_TIMEOUT))
       ]);
-      for (const i of parsed.items || []) {
-        const id = i.guid || i.link || i.title;
-        if (id) all.push({ ...i, id, source: feed.source });
-      }
-    } catch (e) {
-      console.error(`[skip] ${feed.url}: ${e.message}`);
+      return (parsed.items || []).map((i) => ({ ...i, id: i.guid || i.link || i.title, source: feed.source }));
+    })
+  );
+  const all = [];
+  results.forEach((r, idx) => {
+    if (r.status === "fulfilled") {
+      for (const it of r.value) if (it.id) all.push(it);
+    } else {
+      console.error(`[skip] ${FEEDS[idx].url}: ${r.reason?.message || r.reason}`);
     }
-  }
+  });
   return all;
 }
 
@@ -155,9 +161,18 @@ async function run() {
     }
   }
   await saveState(posted);
+  console.log(`posted ${count}`);
 }
 
-run().catch((e) => {
-  console.error(e);
+const wd = setTimeout(() => {
+  console.error("[watchdog] forced exit");
   process.exit(1);
-});
+}, HARD_LIMIT);
+wd.unref();
+
+run()
+  .then(() => clearTimeout(wd))
+  .catch((e) => {
+    console.error(e);
+    process.exit(1);
+  });
