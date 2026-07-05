@@ -9,12 +9,6 @@ const CATEGORIES = [
       { source: "ТСН", url: "https://tsn.ua/rss/full.rss" },
       { source: "НВ", url: "https://nv.ua/rss/all.xml" }
     ]
-  },
-  {
-    label: "⚽ Спорт",
-    feeds: [
-      { source: "Champion", url: "https://champion.com.ua/ukr/rss/" }
-    ]
   }
 ];
 
