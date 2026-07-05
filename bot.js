@@ -28,7 +28,6 @@ const SEND_TIMEOUT = 12000;
 const HARD_LIMIT = 240000;
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const CHANNEL_ID = process.env.CHANNEL_ID;
-const DISCUSSION_URL = process.env.DISCUSSION_URL || "https://t.me/holovne_za_hodynu_chat";
 const CHANNEL_LINK = "https://t.me/holovne_za_hodynu";
 
 const parser = new Parser({
@@ -102,10 +101,7 @@ async function send(text, isNight) {
       text,
       parse_mode: "HTML",
       disable_web_page_preview: false,
-      disable_notification: isNight,
-      reply_markup: {
-        inline_keyboard: [[{ text: "💬 Обговорення", url: DISCUSSION_URL }]]
-      }
+      disable_notification: isNight
     })
   });
   if (!res.ok) throw new Error(`Telegram ${res.status}: ${await res.text()}`);
