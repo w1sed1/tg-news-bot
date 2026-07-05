@@ -26,7 +26,6 @@ jobs:
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
-          DISCUSSION_URL: ${{ secrets.DISCUSSION_URL }}
           TZ: "Europe/Kyiv"
       - name: commit state
         env:
