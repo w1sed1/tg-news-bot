@@ -102,7 +102,10 @@ async function collect() {
   const all = [];
   for (const feed of FEEDS) {
     try {
-      const parsed = await parser.parseURL(feed.url);
+      const parsed = await Promise.race([
+        parser.parseURL(feed.url),
+        new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 12000))
+      ]);
       for (const i of parsed.items || []) {
         const id = i.guid || i.link || i.title;
         if (id) all.push({ ...i, id, source: feed.source });
